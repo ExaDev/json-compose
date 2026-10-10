@@ -1,0 +1,4 @@
+# This is a single-package repo, not a real pnpm workspace: packages is deliberately empty. The file exists to carry pnpm settings.
+packages: []
+# Every dependency add or update writes an exact version, never a range: a floating range lets a routine `pnpm install` silently resolve to a version nobody has reviewed.
+saveExact: true

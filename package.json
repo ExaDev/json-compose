@@ -1,0 +1,70 @@
+{
+  "name": "@exadev/json-compose",
+  "description": "Composes a JSON document from files it extends, with parameters, replace markers and the origin of every node",
+  "version": "0.0.0",
+  "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
+    "@commitlint/cli": "21.2.3",
+    "@commitlint/config-conventional": "21.2.3",
+    "@eslint/js": "10.0.1",
+    "@exadev/eslint-config": "3.0.0",
+    "@semantic-release/changelog": "7.0.0",
+    "@semantic-release/git": "11.0.1",
+    "@types/node": "26.6.4",
+    "@vitest/coverage-v8": "5.0.3",
+    "eslint": "10.12.0",
+    "husky": "9.1.7",
+    "jiti": "2.7.0",
+    "lint-staged": "17.6.0",
+    "publint": "0.3.25",
+    "semantic-release": "25.0.9",
+    "tsdown": "0.23.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vitest": "5.0.3"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "compose",
+    "configuration",
+    "extends",
+    "json",
+    "merge"
+  ],
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "packageManager": "pnpm@12.4.1+sha512.2e81e399d73fe8390dab25e06aa788ab7a5908248d2f5a370f82b481147a6a7a367bf8048f9a6fdb6460f21a66f0542dedb8b94ca2c8723596741920b1656d4c",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ExaDev/json-compose.git"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "lint": "eslint . --fix --cache --max-warnings 0",
+    "lint:check": "eslint . --cache --max-warnings 0",
+    "prepare": "husky",
+    "prepublishOnly": "pnpm run lint:check && pnpm run typecheck && pnpm run test && tsdown && publint && attw --pack --profile esm-only",
+    "release": "semantic-release",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "sideEffects": false,
+  "type": "module",
+  "types": "./dist/index.d.ts"
+}
