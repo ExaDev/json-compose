@@ -2,3 +2,7 @@
 packages: []
 # Every dependency add or update writes an exact version, never a range: a floating range lets a routine `pnpm install` silently resolve to a version nobody has reviewed.
 saveExact: true
+
+# ExaDev's own packages are exempt from the minimum release age: the gate guards against a compromised third-party maintainer, which does not apply to a package this organisation publishes itself. CI never reads the global pnpm config, so the exemption is stated here.
+minimumReleaseAgeExclude:
+  - "@exadev/eslint-config"
