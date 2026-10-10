@@ -1,0 +1,280 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancels a superseded run when a branch or PR gets pushed to again. Scoped away from main so a merge landing mid-release never kills the release job, which runs solely on a push to main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  determine-runner:
+    uses: ./.github/workflows/determine-runner.yml
+
+  commitlint:
+    name: Commitlint
+    needs: determine-runner
+    runs-on: ${{ fromJson(needs.determine-runner.outputs.selected-runner) }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: pnpm
+      # Not wagoid/commitlint-github-action: it is a Docker container action, and the self-hosted fleet has no Docker daemon.
+      - run: pnpm install --frozen-lockfile
+      - name: Lint the commits of a pull request
+        if: github.event_name == 'pull_request'
+        run: pnpm exec commitlint --from "$BASE_SHA" --to "$HEAD_SHA"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      - name: Lint the last commit of a push
+        if: github.event_name != 'pull_request'
+        run: pnpm exec commitlint --last
+
+  lint:
+    name: Lint
+    needs: determine-runner
+    runs-on: ${{ fromJson(needs.determine-runner.outputs.selected-runner) }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: pnpm
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .eslintcache
+          # eslint.config.ts and pnpm-lock.yaml both invalidate the cache: a rule change or a dependency bump can change lint results even for files whose own content did not change.
+          key: eslintcache-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'eslint.config.ts') }}
+          restore-keys: eslintcache-${{ runner.os }}-
+      - run: pnpm install --frozen-lockfile
+      # The check-only script: `pnpm lint` fixes in place, so it would exit 0 on a fixable violation that never reaches the commit.
+      - run: pnpm lint:check
+
+  typecheck:
+    name: Typecheck
+    needs: determine-runner
+    runs-on: ${{ fromJson(needs.determine-runner.outputs.selected-runner) }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm exec publint
+      - run: pnpm exec attw --pack --profile esm-only
+
+  actionlint:
+    name: Actionlint
+    needs: determine-runner
+    runs-on: ${{ fromJson(needs.determine-runner.outputs.selected-runner) }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # actionlint and the shellcheck it runs on every `run:` script, each at an exact version and each archive checked against the SHA-256 committed here before it is unpacked. The digests match actionlint's release checksums file and the asset digests GitHub records for both releases. shellcheck is installed rather than taken from the runner, because the fleet image has none and actionlint silently skips script checks without it. The fleet is linux/arm64 and Blacksmith linux/x64, so the archive follows the runner.
+      - name: Install actionlint and shellcheck
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          SHELLCHECK_VERSION: 0.11.0
+        run: |
+          case "$RUNNER_ARCH" in
+            X64)
+              actionlint_arch=amd64 actionlint_sha256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+              shellcheck_arch=x86_64 shellcheck_sha256=b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+              ;;
+            ARM64)
+              actionlint_arch=arm64 actionlint_sha256=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
+              shellcheck_arch=aarch64 shellcheck_sha256=68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc
+              ;;
+            *)
+              echo "::error::No pinned actionlint or shellcheck build for runner architecture $RUNNER_ARCH"
+              exit 1
+              ;;
+          esac
+          tools="$RUNNER_TEMP/workflow-linters"
+          mkdir -p "$tools"
+          cd "$tools"
+          actionlint_archive="actionlint_${ACTIONLINT_VERSION}_linux_${actionlint_arch}.tar.gz"
+          shellcheck_archive="shellcheck-v${SHELLCHECK_VERSION}.linux.${shellcheck_arch}.tar.gz"
+          curl -fsSLo "$actionlint_archive" "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${actionlint_archive}"
+          curl -fsSLo "$shellcheck_archive" "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${shellcheck_archive}"
+          printf '%s  %s\n' "$actionlint_sha256" "$actionlint_archive" "$shellcheck_sha256" "$shellcheck_archive" | sha256sum --check --strict
+          tar -xzf "$actionlint_archive" actionlint
+          tar -xzf "$shellcheck_archive" --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          echo "$tools" >> "$GITHUB_PATH"
+      # With no file arguments actionlint lints every workflow in the repository's own .github/workflows.
+      - name: Lint every workflow
+        run: actionlint -config-file .github/actionlint.yaml
+
+  zizmor:
+    name: Zizmor
+    needs: determine-runner
+    runs-on: ${{ fromJson(needs.determine-runner.outputs.selected-runner) }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # uvx rather than zizmorcore/zizmor-action: the action runs zizmor's container image and fails without a Docker daemon, which the fleet's runner pods do not have. setup-uv checks the uv download against its published checksum, and uv fetches a Python for zizmor's environment if the runner has none.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: 0.12.19
+          enable-cache: false
+      # Offline, so the result never depends on whether a token happens to be in the environment: the online audits (impostor commits, known-vulnerable actions, ref confusion) only run with one. Every workflow, composite action and the Dependabot configuration in the repository is audited.
+      - name: Audit every workflow and action
+        run: uvx zizmor@1.30.1 --offline --config .github/zizmor.yml --no-progress .
+
+  # The packed tarball, not the source tree, is what consumers install: this proves the published files and exports map work in a clean project on every Node line the package supports. The toolchain needs Node 22, so the package is built and packed on 22 and the consumer check runs on the Node under test.
+  package:
+    name: Package (Node ${{ matrix.node }})
+    needs: determine-runner
+    runs-on: ${{ fromJson(needs.determine-runner.outputs.selected-runner) }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm pack --pack-destination "$RUNNER_TEMP/pack"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Create a scratch project
+        run: |
+          mkdir "$RUNNER_TEMP/scratch"
+          cd "$RUNNER_TEMP/scratch"
+          npm init -y
+      # A consumer's install of the packed tarball is what this job checks, so it has no lockfile by design. It is a step of its own so that zizmor's adhoc-packages audit can be ignored on this one line: zizmor reads an ignore comment only as a YAML comment, never inside a multi-line run script.
+      - name: Install the tarball into the scratch project
+        working-directory: ${{ runner.temp }}/scratch
+        run: npm install "$RUNNER_TEMP"/pack/*.tgz # zizmor: ignore[adhoc-packages]
+      - name: Compose a document with extends through the installed package
+        working-directory: ${{ runner.temp }}/scratch
+        run: |
+          cat > check.mjs <<'EOF'
+          import assert from 'node:assert/strict';
+          import { readFile, writeFile } from 'node:fs/promises';
+          import { composeJson } from '@exadev/json-compose';
+
+          await writeFile('base.json', '{ "a": "base", "b": "base" }');
+          await writeFile('main.json', '{ "extends": "./base.json", "b": "main" }');
+          const composed = await composeJson('main.json', { read: (path) => readFile(path, 'utf8') });
+          assert.deepEqual(composed.value, { a: 'base', b: 'main' });
+          assert.deepEqual(composed.originOf('/a'), { file: 'base.json', pointer: '/a' });
+          EOF
+          node check.mjs
+
+  required-checks:
+    name: Required Checks
+    needs: [determine-runner, commitlint, lint, typecheck, package, actionlint, zizmor]
+    # Always runs, even if a dependency failed, so it reports that failure itself rather than being skipped: a required check that is silently absent blocks a PR indefinitely instead of failing it visibly.
+    if: always()
+    runs-on: ${{ fromJson(needs.determine-runner.outputs.selected-runner) }}
+    timeout-minutes: 5
+    steps:
+      - name: Fail if any required job failed or was cancelled
+        # The needs context reaches the script through env rather than being expanded into it: job outputs are part of that JSON, and an expression expanded inside a single-quoted echo would let a quote in any of them end the string and run as shell.
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more required jobs did not succeed:"
+            printf '%s\n' "$NEEDS_JSON"
+            exit 1
+          fi
+
+  release:
+    name: Release
+    needs: [commitlint, lint, typecheck, package]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    # Deliberately a GitHub-hosted runner, not the resolved one: npm trusted publishing only works from GitHub-hosted runners, so the OIDC token exchange cannot happen on the self-hosted fleet or Blacksmith.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # to push the release commit and tag and create the GitHub Release
+      issues: write # to comment on released issues
+      pull-requests: write # to comment on released pull requests
+      id-token: write # OIDC identity for npm trusted publishing and provenance (no NPM_TOKEN)
+    steps:
+      # The default GITHUB_TOKEN cannot bypass a repository ruleset (GitHub does not support naming the github-actions[bot] identity as a bypass actor), so semantic-release's release commit and tag push needs its own bypass identity. A deploy key with write access, listed as a DeployKey bypass actor on the main ruleset, is the lightest one: repository-scoped, with no GitHub App installation and no personal or organisation-admin credential. Because the key can push straight to main, it exists on the runner only for the last two steps: checkout does not receive it, so it is not in git config or on disk while the setup actions, the install and the npm upgrade run. That is the whole gain. Those earlier steps can still change PATH, the environment or installed code (node_modules, global npm) that later runs with the key present, so this narrows exposure to code that merely reads the secret when it runs and does not isolate the key from a compromised earlier step. Full isolation needs the install separated from the credential.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # semantic-release analyses the full commit history since the last release.
+          fetch-depth: 0
+          # The deploy key is deliberately not passed here, and credentials are not persisted: checkout fetches with the job's own token and then removes it, leaving nothing in git config for later steps.
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: pnpm
+          # registry-url is deliberately absent: setup-node would otherwise write an .npmrc _authToken line that wins over the OIDC token exchange, breaking trusted publishing.
+      - run: pnpm install --frozen-lockfile
+      # Pinned to an explicit release rather than npm@latest, so a newly published (or compromised) latest never runs in the job that holds the OIDC token. Trusted publishing needs npm CLI >=11.5.1; raise the pin deliberately, choosing a release that is at least a week old.
+      - name: Upgrade npm for OIDC trusted publishing (needs npm CLI >=11.5.1)
+        # zizmor's adhoc-packages audit flags any install outside a lockfile; this one is a single exact version, chosen and raised deliberately as the comment above says, so it is ignored here rather than in the whole repository.
+        run: npm install -g npm@11.20.0 # zizmor: ignore[adhoc-packages]
+      # The last step before Release and the only place the key is provisioned: written to the runner's temp directory with mode 600 from the step's env (never a command line), together with GitHub's ed25519 host key, pinned so the connection is verified rather than trusted on first use (fingerprint SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU, as published at https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints). The step then proves the key has write access to the repository, because semantic-release falls back to an https URL with GITHUB_TOKEN embedded when its own SSH push check fails, and the ruleset would reject that push only after the release had started. The dry run targets a ref name that does not exist, so it can never be rejected as non-fast-forward when main has moved on since checkout (semantic-release itself skips that case cleanly, and the step must not turn it into a failure). GitHub does not evaluate rulesets on a dry run, so this does not prove the key is a bypass actor. BASH_ENV is blanked and ssh and git are called by absolute path so that a variable or PATH entry set by an earlier step does not redirect them.
+      - name: Provision the deploy key for the Release step
+        env:
+          RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+          # Blanked so a BASH_ENV exported by an earlier step cannot run in the shell that holds the key.
+          BASH_ENV: ''
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/release-ssh"
+          (umask 077 && printf '%s\n' "${RELEASE_DEPLOY_KEY%$'\n'}" > "$RUNNER_TEMP/release-ssh/id")
+          printf '%s\n' 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$RUNNER_TEMP/release-ssh/known_hosts"
+          # Must match the GIT_SSH_COMMAND of the Release step.
+          GIT_SSH_COMMAND="/usr/bin/ssh -i $RUNNER_TEMP/release-ssh/id -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/release-ssh/known_hosts -o StrictHostKeyChecking=yes" \
+            /usr/bin/git push --dry-run --no-verify "git@github.com:$GITHUB_REPOSITORY.git" "HEAD:refs/heads/release-key-probe-$GITHUB_RUN_ID"
+      - name: Release
+        # HUSKY=0 so the commit-msg hook never fires against the automated release commit. GIT_SSH_COMMAND is set on this step alone, so semantic-release's push to the SSH repositoryUrl authenticates with the deploy key.
+        run: HUSKY=0 pnpm exec semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Must match the GIT_SSH_COMMAND of the provisioning step.
+          GIT_SSH_COMMAND: /usr/bin/ssh -i ${{ runner.temp }}/release-ssh/id -o IdentitiesOnly=yes -o UserKnownHostsFile=${{ runner.temp }}/release-ssh/known_hosts -o StrictHostKeyChecking=yes
+          # Blanked, not omitted: an inherited NPM_TOKEN or NODE_AUTH_TOKEN would otherwise be used in preference to the OIDC exchange.
+          NPM_TOKEN: ''
+          NODE_AUTH_TOKEN: ''
+      - name: Remove the deploy key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/release-ssh"

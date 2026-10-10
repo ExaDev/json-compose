@@ -1,0 +1,6 @@
+# actionlint configuration, passed to the Actionlint job in ci.yml with -config-file. See https://github.com/rhysd/actionlint/blob/v1.7.12/docs/config.md.
+self-hosted-runner:
+  # Every runner label a job here can name that GitHub does not host: ExaDev's own fleet (the runner-fallback-action's default preferred label, which determine-runner.yml resolves to while the fleet heartbeat is current) and the Blacksmith pool the resolver runs on and falls back to. actionlint reports any label missing from this list as unknown.
+  labels:
+    - exadev-runners
+    - blacksmith-2vcpu-ubuntu-2404

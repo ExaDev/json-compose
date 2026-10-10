@@ -1,0 +1,31 @@
+name: Determine runner
+
+# The one runner-selection job every job in ci.yml waits on (via workflow_call) instead of hard-coding a runner: ExaDev's self-hosted fleet first, falling back to Blacksmith if the fleet's heartbeat is stale. The decision is made by ExaDev/runner-fallback-action, which reads a secret gist refreshed by the fleet's heartbeat (exadev/github-runner); no token, no secret, no per-repo setup. The action also forces the fallback for Dependabot and fork PRs so untrusted code never runs on the fleet.
+#
+# The resolver itself runs on Blacksmith's smallest runner, not ubuntu-latest and not the fleet. This job decides whether the fleet can be used at all, so it must sit on infrastructure independent of both: on the fleet, a fleet-wide outage deadlocks every workflow at this job because the fallback can never engage; on ubuntu-latest, the org's recurring GitHub-hosted billing block stops the job before it starts. Blacksmith is billed outside GitHub's spending limit.
+#
+# The fallback is Blacksmith rather than the action's ubuntu-latest default for the same reason: routing dependent jobs to a pool that cannot start would recreate the deadlock one hop out. The preferred label is the action's default (exadev-runners, the fleet's shared runs-on label), so no `preferred-labels` override is set and routing returns to the fleet whenever the heartbeat is current.
+#
+# The action is pinned to a commit SHA, not a branch: b774d51 is the commit that introduced the secret-gist design. Bump deliberately when a newer commit is wanted.
+on:
+  workflow_call:
+    outputs:
+      selected-runner:
+        description: "A JSON array of runner labels for fromJson at the call site."
+        value: ${{ jobs.determine-runner.outputs.selected-runner }}
+      preferred-available:
+        description: "Whether the preferred (fleet) runner was reachable."
+        value: ${{ jobs.determine-runner.outputs.preferred-available }}
+
+jobs:
+  determine-runner:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      selected-runner: ${{ steps.fallback.outputs.selected-runner || '["blacksmith-2vcpu-ubuntu-2404"]' }}
+      preferred-available: ${{ steps.fallback.outputs.preferred-available || 'false' }}
+    steps:
+      - id: fallback
+        uses: ExaDev/runner-fallback-action@b774d51ff5360bf53705b2eb34ff019afd4d7f07
+        with:
+          fallback-labels: blacksmith-2vcpu-ubuntu-2404

@@ -1,0 +1,23 @@
+# Dependabot for the GitHub Actions this repository's workflows use and for its npm dependencies. Every third-party action is pinned by full commit SHA with its release in a trailing comment, so a tag moved by someone outside ExaDev cannot change the code a job runs; Dependabot keeps those pins current by proposing the new SHA and comment together. The npm entry reads the pnpm lockfile at the root and updates it with the manifests it covers.
+#
+# Every entry waits a week after a release before proposing it (cooldown), so a compromised or broken publish has time to be noticed and pulled before it reaches a pull request here. It is the same seven days as the minimum release age local package installs enforce, so Dependabot never proposes a version a local install would refuse. Security updates are not delayed by it.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]

@@ -1,0 +1,11 @@
+# zizmor configuration, read by the Zizmor job in ci.yml (https://docs.zizmor.sh/configuration/).
+rules:
+  unpinned-uses:
+    config:
+      # The same policy as workspace-conformance's workflow-action-pinning check with `organisations: [ExaDev]`: an action from outside the organisation must be pinned by full commit SHA, since a tag can be moved to different code by someone we do not control, while ExaDev's own actions may be referenced by tag so their owners can roll out a fix without every caller changing. zizmor's own default has required a SHA for every action, our own included, since 1.20.
+      policies:
+        "ExaDev/*": ref-pin
+        "*": hash-pin
+  self-repository:
+    # This audit asks for GitHub's `uses: $/...` self-repository syntax in place of `./...`. actionlint 1.7.12, the version the Actionlint job runs, rejects that syntax as a malformed action reference (rhysd/actionlint#711 is open for it), so adopting it would turn one linter's finding into the other's error. Every local reference here stays `./...` until actionlint accepts `$/`.
+    disable: true
