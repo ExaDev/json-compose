@@ -1,7 +1,7 @@
 {
   "name": "@exadev/json-compose",
   "description": "Composes a JSON document from files it extends, with parameters, replace markers and the origin of every node",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
     "@commitlint/cli": "21.2.3",
