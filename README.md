@@ -1,5 +1,7 @@
 # @exadev/json-compose
 
+[![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/ExaDev/json-compose) [![npm](https://img.shields.io/badge/npm-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/@exadev/json-compose) [![Release](https://img.shields.io/github/v/release/ExaDev/json-compose)](https://github.com/ExaDev/json-compose/releases/latest) [![CI](https://img.shields.io/github/actions/workflow/status/ExaDev/json-compose/ci.yml?branch=main)](https://github.com/ExaDev/json-compose/actions)
+
 Composes one JSON document from a file and the files it `extends`, and remembers which file and pointer every node of the result was authored at, so a validation error on the merged value can be reported against the source that caused it.
 
 It does no validation of its own and has no runtime dependencies. File access is injected, so it runs wherever you can supply a `read(path)` function.
